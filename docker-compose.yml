@@ -1,0 +1,25 @@
+services:
+  python-app:
+    build: .
+    environment:
+      - PULSE_SERVER=docker.for.mac.localhost
+    working_dir: /opt  # コンテナログイン時のディレクトリを/optに設定
+    volumes:
+      - type: bind
+        source: ~/.config/pulse
+        target: /home/kali/.config/pulse
+      - akali-data:/home/kali
+      - ./.tmux.conf:/home/kali/.tmux.conf:ro
+      # ホストの ./opt とコンテナの /opt を同期
+      - ./opt:/opt:rw
+    tty: true
+    stdin_open: true
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    ports:
+      - "5905:5901" # VNC用ポート
+
+volumes:
+  akali-data:
