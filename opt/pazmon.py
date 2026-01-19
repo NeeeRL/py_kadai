@@ -81,33 +81,51 @@ def hp_bar_surf(current: int, max_hp: int, w: int, h: int) -> pg.Surface:
 def init_field()->List[List[str]]:
     return [[random.choice(GEMS) for i in range(6)] for j in range(5)]
 
-def leftmost_run(field:List[str])->Optional[Tuple[int,int]]:
-    n=len(field); i=0
-    while i<n:
-        j=i+1
-        while j<n and field[j]==field[i]: j+=1
-        L=j-i
-        if L>=3 and field[i] in GEMS: return (i,L)
-        i=j
-    return None
+def get_all_runs(line: List[str]) -> List[Tuple[int, int]]:
+    runs = []
+    n = len(line)
+    i = 0
+    while i < n:
+        j = i + 1
+        while j < n and line[j] == line[i]:
+            j += 1
+        
+        length = j - i
+        # 3つ以上、かつ「無」以外ならマッチとみなす
+        if length >= 3 and line[i] in GEMS:
+            runs.append((i, length))
+        
+        i = j
+    return runs
 
+# --- 盤面全体スキャン ---
 def scan_grid(grid: List[List[str]]) -> List[dict[str, int]]:
     matches = []
     rows = len(grid)
     cols = len(grid[0])
 
+    # 横方向（行）を捜査
     for y in range(rows):
-        result = leftmost_run(grid[y])
-        if result:
-            start_x, length = result
-            matches.append({ "type": "yoko", "y": y, "x": start_x, "length": length })
+        runs = get_all_runs(grid[y])
+        for start_x, length in runs:
+            matches.append({
+                "type": "yoko",
+                "y": y,
+                "x": start_x,
+                "length": length
+            })
 
+    # 縦方向（列）を捜査
     for x in range(cols):
         col_list = [grid[y][x] for y in range(rows)]
-        result = leftmost_run(col_list)
-        if result:
-            start_y, length = result
-            matches.append({ "type": "tate", "x": x, "y": start_y, "length": length })
+        runs = get_all_runs(col_list)
+        for start_y, length in runs:
+            matches.append({
+                "type": "tate",
+                "x": x,
+                "y": start_y,
+                "length": length
+            })
 
     return matches
 
@@ -236,6 +254,7 @@ def draw_message(screen, text, font):
     surf = font.render(text, True, (230,230,230))
     screen.blit(surf,(40,450))
 
+# 鎌足
 def get_clusters(field: List[List[str]], matches: List[dict]) -> List[dict]:
     matched_coords = set()
     for m in matches:
@@ -325,6 +344,7 @@ def main():
             return (grid_x, grid_y)
         return None
 
+    # なんかの時用に変数として保持
     running = True
     message = ""
     while running:
@@ -343,19 +363,29 @@ def main():
 
             elif e.type == pg.MOUSEMOTION:
                 mx, my = e.pos
-                hover_pos = get_grid_pos_at_mouse(mx, my)
 
-                if drag_src is not None and hover_pos is not None:
-                    drop_pos = get_grid_pos_at_mouse(mx, my)
+                if drag_src is not None :
+                    rows = len(field)
+                    cols = len(field[0])
+                    
+                    raw_x = (mx - LEFT_MARGIN) // (SLOT_W + SLOT_PAD)
+                    raw_y = (my - FIELD_Y) // (SLOT_W + SLOT_PAD)
+
+                    nx = max(0, min(cols - 1, raw_x))
+                    ny = max(0, min(rows - 1, raw_y))
+
+                    hover_pos = (nx, ny)
+
 
                     if hover_pos != drag_src:
                         sx, sy = drag_src
-                        dx, dy = hover_pos
 
-                        if abs(sx - dx) <= 1 and abs(sy - dy) <= 1:
-                            field[sy][sx], field[dy][dx] = field[dy][dx], field[sy][sx]
+                        if abs(sx - nx) <= 1 and abs(sy - ny) <= 1:
+                            field[sy][sx], field[ny][nx] = field[ny][nx], field[sy][sx]
                             turn_processed = True
                             drag_src = hover_pos
+                else:
+                    hover_pos = get_grid_pos_at_mouse(mx, my)
 
 
             elif e.type == pg.MOUSEBUTTONUP and e.button == 1:
@@ -371,38 +401,31 @@ def main():
                     message = "drop now"
 
 
-                # === パズル処理ロジック ===
                 if turn_processed:
                     combo = 0
+                    to_do = {"火": 0, "水": 0, "風": 0, "土": 0, "命": 0}
+
                     while True:
-                        # 1. まず縦横のラインを探す
                         raw_matches = scan_grid(field)
                         if not raw_matches: break 
 
-                        # 2. ★追加★ T字やL字を結合して「塊」のリストにする
                         clusters = get_clusters(field, raw_matches)
 
-                        # 3. 塊（コンボ）ごとに処理
                         for cluster in clusters:
                             combo += 1
                             
                             elem = cluster["color"]
                             count = cluster["count"]     # その塊のジェム数
                             coords = cluster["coords"]   # その塊の座標リスト
+
+                            bonus = (count - 3) * 0.10
+
+                            score = 1.00 + bonus
                             
-                            # ダメージ・回復計算
-                            # ※ count（個数）を使って計算します
-                            if elem == "命":
-                                # 回復量は個数が多いほど増える計算
-                                heal = jitter(20 * (1.5 ** ((count - 3) + combo)))
-                                party["hp"] = min(party["max_hp"], party["hp"] + heal)
-                                message = f"HP +{heal}"
-                            else:
-                                dmg = party_attack_from_gems(elem, count, combo, party, enemy)
-                                message = f"{elem}攻撃！ {dmg} ダメージ"
+                            to_do[elem] += score 
+                            
 
                             # 盤面からの削除
-                            # cluster["coords"] に消すべき全座標が入っています
                             for (gx, gy) in coords:
                                 field[gy][gx] = "無"
 
@@ -412,7 +435,7 @@ def main():
                             draw_field(screen, field, font)
                             draw_message(screen, f"コンボ {combo}！ {message}", font)
                             pg.display.flip()
-                            time.sleep(0.3)
+                            time.sleep(0.4)
 
                         # 全コンボ処理終了後、落下
                         grav(field)
@@ -421,13 +444,31 @@ def main():
                         screen.fill((22, 22, 28))
                         draw_top(screen, enemy, party, font)
                         draw_field(screen, field, font)
-                        draw_message(screen, "落下＆補充", font)
                         pg.display.flip()
                         time.sleep(FRAME_DELAY)
 
-                        if enemy["hp"] <= 0:
-                            message = f"{enemy['name']} を倒した！"
-                            break
+
+                    # ここから攻撃や回復をするようにする
+                    # ダメージ・回復計算
+                    # ※ count（個数）を使って計算します だから、それ相応の処理を書かねばならむ
+
+                    for elem, value in to_do.items():
+                        if value == 0:
+                            continue
+
+                        if elem == "命":
+                            # 回復量は個数が多いほど増える計算
+                            heal = jitter(20 * value)
+                            party["hp"] = min(party["max_hp"], party["hp"] + heal)
+                            message = f"HP +{heal}"
+                        else:
+                            dmg = party_attack_from_gems(elem, value, combo, party, enemy)
+                            message = f"{elem}攻撃！ {dmg} ダメージ"
+                        
+
+                    if enemy["hp"] <= 0:
+                        message = f"{enemy['name']} を倒した！"
+
                     if enemy["hp"] > 0:
                         edmg = enemy_attack(party, enemy)
                         message = f"{enemy['name']}の攻撃！ -{edmg}"
@@ -448,10 +489,16 @@ def main():
                         enemy_idx += 1
                         if enemy_idx < len(enemies):
                             enemy = enemies[enemy_idx]
-                            # field = init_field() # ★もし新しい敵で盤面リセットしたいならコメント外す
                             message = f"さらに奥へ… 次は {enemy['name']}"
                         else:
                             message = "ダンジョン制覇！おめでとう！（ESCで終了）"
+                    
+                    # （以下、以前と同じ落下後の描画処理...）
+                    screen.fill((22, 22, 28))
+                    draw_top(screen, enemy, party, font)
+                    draw_field(screen, field, font)
+                    pg.display.flip()
+                    time.sleep(FRAME_DELAY)
 
         screen.fill((22, 22, 28))
         draw_top(screen, enemy, party, font)
