@@ -22,12 +22,12 @@ def get_jp_font(size: int) -> pg.font.Font:
 # ---------------- 可変パラメータ ----------------
 FRAME_DELAY = 0.5
 ENEMY_DELAY = 1.0
-WIN_W, WIN_H = 980, 720
+WIN_W, WIN_H = 450, 800
 
-FIELD_Y = 300
+FIELD_Y = 450
 SLOT_W = 60
 SLOT_PAD = 8
-LEFT_MARGIN = 540
+LEFT_MARGIN = 21
 
 # ドラッグ演出
 DRAG_SCALE = 1.18
@@ -98,7 +98,7 @@ def get_all_runs(line: List[str]) -> List[Tuple[int, int]]:
         i = j
     return runs
 
-# --- 盤面全体スキャン ---
+# 盤面全体スキャン
 def scan_grid(grid: List[List[str]]) -> List[dict[str, int]]:
     matches = []
     rows = len(grid)
@@ -129,21 +129,140 @@ def scan_grid(grid: List[List[str]]) -> List[dict[str, int]]:
 
     return matches
 
-def grav(field:List[List[str]]):
+# 鎌足
+def get_clusters(field: List[List[str]], matches: List[dict]) -> List[dict]:
+    matched_coords = set()
+    for m in matches:
+        if m["type"] == "yoko":
+            for k in range(m["x"], m["x"] + m["length"]):
+                matched_coords.add((k, m["y"]))
+        else: # tate
+            for k in range(m["y"], m["y"] + m["length"]):
+                matched_coords.add((m["x"], k))
+
+    clusters = []
+    visited = set()
+
+    for cx, cy in matched_coords:
+        if (cx, cy) in visited:
+            continue
+
+        color = field[cy][cx]
+        gem_group = []
+        
+        stack = [(cx, cy)]
+        visited.add((cx, cy))
+
+        while stack:
+            curr_x, curr_y = stack.pop()
+            gem_group.append((curr_x, curr_y))
+
+            for dx, dy in [(1,0), (-1,0), (0,1), (0,-1)]:
+                nx, ny = curr_x + dx, curr_y + dy
+                
+                if (nx, ny) in matched_coords and (nx, ny) not in visited:
+                    if field[ny][nx] == color:
+                        visited.add((nx, ny))
+                        stack.append((nx, ny))
+        
+        clusters.append({
+            "color": color,
+            "count": len(gem_group),
+            "coords": gem_group
+        })
+
+    return clusters
+
+
+def animation_fall(screen, field, font, party, enemy):
     rows = len(field)
     cols = len(field[0])
     
+    # --- どこからどこへ動くかを計算する ---
+    moves = [] # { "elem":ジェム, "x":ピクセルX, "start_y":開始Y, "end_y":終了Y }
+    
     for x in range(cols):
-        alive_gems = []
+        old_gems = []
         for y in range(rows):
             if field[y][x] != "無":
-                alive_gems.append(field[y][x])
+                old_gems.append({
+                    "elem": field[y][x],
+                    "original_y": y
+                })
+        
+        missing_count = rows - len(old_gems)
+        new_gems_list = [random.choice(GEMS) for _ in range(missing_count)]
+        
+        write_y = rows - 1
+        
+        for item in reversed(old_gems):
+            elem = item["elem"]
+            org_y = item["original_y"]
+            dest_y = write_y
+            
+            # 座標計算
+            px = LEFT_MARGIN + x * (SLOT_W + SLOT_PAD)
+            start_px = FIELD_Y + org_y * (SLOT_W + SLOT_PAD)
+            end_px   = FIELD_Y + dest_y * (SLOT_W + SLOT_PAD)
+            
+            moves.append({
+                "elem": elem, "x": px,
+                "start_y": start_px, "end_y": end_px
+            })
+            
+            field[dest_y][x] = elem
+            write_y -= 1
+            
+        for i, elem in enumerate(reversed(new_gems_list)):
+            dest_y = write_y
+            
+            px = LEFT_MARGIN + x * (SLOT_W + SLOT_PAD)
+            end_px   = FIELD_Y + dest_y * (SLOT_W + SLOT_PAD)
+            start_px = FIELD_Y + (dest_y - missing_count - 1) * (SLOT_W + SLOT_PAD) - 20
+            
+            moves.append({
+                "elem": elem, "x": px,
+                "start_y": start_px, "end_y": end_px
+            })
+            
+            field[dest_y][x] = elem
+            write_y -= 1
 
-        missing_count = rows - len(alive_gems)
-        new_gems = [random.choice(GEMS) for _ in range(missing_count)]
-        new_column = new_gems + alive_gems
+    # --- アニメーションループ ---
+    duration = 0.45
+    start_time = time.time()
+    
+    while True:
+        now = time.time()
+        progress = (now - start_time) / duration
+        if progress > 1.0: progress = 1.0
+        
+        t = progress * progress
+        
+        pg.event.pump() # フリーズ防止
+        
+        screen.fill((22, 22, 28))
+        draw_top(screen, enemy, party, font)
+        
+
         for y in range(rows):
-            field[y][x] = new_column[y]
+            for x in range(cols):
+                rect_x = LEFT_MARGIN + x * (SLOT_W + SLOT_PAD)
+                rect_y = FIELD_Y + y * (SLOT_W + SLOT_PAD)
+                pg.draw.rect(screen, (35, 35, 40), (rect_x, rect_y, SLOT_W, SLOT_W), border_radius=8)
+
+        for m in moves:
+            current_y = m["start_y"] + (m["end_y"] - m["start_y"]) * t
+            draw_gem_at(screen, m["elem"], int(m["x"] + SLOT_W//2), int(current_y + SLOT_W//2), font=font)
+        
+        draw_message(screen, "落下中...", font)
+        pg.display.flip()
+        
+        if progress >= 1.0:
+            break
+        
+        time.sleep(0.05)
+
 
 # ---------------- ダメージ/回復 ----------------
 def jitter(v:float, r:float=0.10)->int:
@@ -196,11 +315,6 @@ def draw_field(screen, field: list[list[str]], font,
     rows = len(field)
     cols = len(field[0])
 
-    for x in range(cols):
-        tx = LEFT_MARGIN + x * (SLOT_W + SLOT_PAD)
-        if x < len(SLOTS):
-            s = font.render(SLOTS[x], True, (220, 220, 220))
-            screen.blit(s, (tx + (SLOT_W - s.get_width()) // 2, FIELD_Y - 28))
 
     for y in range(rows):
         for x in range(cols):
@@ -229,75 +343,92 @@ def draw_field(screen, field: list[list[str]], font,
         mx, my = pg.mouse.get_pos()
         draw_gem_at(screen, drag_elem, mx, my - 4, scale=DRAG_SCALE, with_shadow=True, font=font)
 
+
+def draw_heart_icon(screen, x, y, size=20, color=(255, 100, 100)):
+    r = size // 4
+    # 左の丸
+    pg.draw.circle(screen, color, (x - r, y - r), r)
+    # 右の丸
+    pg.draw.circle(screen, color, (x + r, y - r), r)
+    # 下の逆三角形
+    triangle_points = [
+        (x - size//2, y - r), # 左上
+        (x + size//2, y - r), # 右上
+        (x, y + size//2)      # 下の頂点
+    ]
+    pg.draw.polygon(screen, color, triangle_points)
+
+def draw_unit_status(screen, cx, y, current_hp, max_hp, font, heart_color):
+    bar_w = 350
+    bar_h = 16
+    icon_size = 20
+    gap = 8
+    padding = 6
+
+    content_width = icon_size + gap + bar_w
+    
+    start_x = cx - (content_width // 2)
+
+    border_rect = pg.Rect(
+        start_x - padding, 
+        y - padding, 
+        content_width + padding * 2, 
+        max(icon_size, bar_h) + padding * 2
+    )
+    pg.draw.rect(screen, (150, 150, 180), border_rect, width=1, border_radius=4)
+
+    heart_center_x = start_x + (icon_size // 2)
+    heart_center_y = y + (max(icon_size, bar_h) // 2)
+    draw_heart_icon(screen, heart_center_x, heart_center_y, size=icon_size, color=heart_color)
+
+    bar_x = start_x + icon_size + gap
+    bar_y = y + (max(icon_size, bar_h) - bar_h) // 2
+    
+    hp_surf = hp_bar_surf(current_hp, max_hp, bar_w, bar_h)
+    screen.blit(hp_surf, (bar_x, bar_y))
+
+    text = f"{int(current_hp)}/{max_hp}"
+    t_surf = font.render(text, True, (255, 255, 255))
+    
+    # 右寄せ計算
+    text_x = (bar_x + bar_w) - t_surf.get_width()
+    text_y = bar_y - 10
+
+    # 文字が見えやすいように少し影をつける（オプション）
+    shadow = font.render(text, True, (0, 0, 0))
+    screen.blit(shadow, (text_x + 1, text_y + 1))
+    
+    screen.blit(t_surf, (text_x, text_y))
+
 def draw_top(screen, enemy, party, font):
+    cx = WIN_W // 2
+
+    # --- 敵画像 ---
     img = load_monster_image(enemy["name"])
-    screen.blit(img, (40, 40))
+    screen.blit(img, (cx - 128, 10))
 
-    name = font.render(enemy["name"], True, (240, 240, 240))
-    screen.blit(name, (320, 40))
-    enemy_bar = hp_bar_surf(enemy["hp"], enemy["max_hp"], 420, 18)
-    screen.blit(enemy_bar, (320, 80))
+    # --- 敵の名前 ---
+    name = font.render(enemy["name"], True, (255, 255, 255))
+    name_rect = name.get_rect(center=(cx, 250))
+    screen.blit(name, name_rect)
 
-    enemy_hp_text = font.render(f"{enemy['hp']}/{enemy['max_hp']}", True, (240, 240, 240))
-    screen.blit(enemy_hp_text, (750, 78))
+    # --- 敵のステータス ---
+    draw_unit_status(
+        screen, cx, 280, 
+        enemy["hp"], enemy["max_hp"], 
+        font, (200, 100, 255)
+    )
 
-    label = font.render("パーティ", True, (240, 240, 240))
-    screen.blit(label, (320, 110))
-
-    party_bar = hp_bar_surf(party["hp"], party["max_hp"], 420, 18)
-    screen.blit(party_bar, (320, 140))
-
-    party_hp_text = font.render(f"{int(party['hp'])}/{party['max_hp']}", True, (240, 240, 240))
-    screen.blit(party_hp_text, (750, 138))
+    # --- 味方のステータス ---
+    draw_unit_status(
+        screen, cx, 410, 
+        party["hp"], party["max_hp"], 
+        font, (255, 80, 80)
+    )
 
 def draw_message(screen, text, font):
     surf = font.render(text, True, (230,230,230))
-    screen.blit(surf,(40,450))
-
-# 鎌足
-def get_clusters(field: List[List[str]], matches: List[dict]) -> List[dict]:
-    matched_coords = set()
-    for m in matches:
-        if m["type"] == "yoko":
-            for k in range(m["x"], m["x"] + m["length"]):
-                matched_coords.add((k, m["y"]))
-        else: # tate
-            for k in range(m["y"], m["y"] + m["length"]):
-                matched_coords.add((m["x"], k))
-
-    clusters = []
-    visited = set()
-
-    for cx, cy in matched_coords:
-        if (cx, cy) in visited:
-            continue
-
-        color = field[cy][cx]
-        gem_group = []
-        
-        stack = [(cx, cy)]
-        visited.add((cx, cy))
-
-        while stack:
-            curr_x, curr_y = stack.pop()
-            gem_group.append((curr_x, curr_y))
-
-            for dx, dy in [(1,0), (-1,0), (0,1), (0,-1)]:
-                nx, ny = curr_x + dx, curr_y + dy
-                
-                if (nx, ny) in matched_coords and (nx, ny) not in visited:
-                    if field[ny][nx] == color:
-                        visited.add((nx, ny))
-                        stack.append((nx, ny))
-        
-        clusters.append({
-            "color": color,
-            "count": len(gem_group),
-            "coords": gem_group
-        })
-
-    return clusters
-
+    screen.blit(surf,(40,460))
 
 # ---------------- メイン ----------------
 def main():
@@ -392,7 +523,7 @@ def main():
                 turn_processed = False
 
 
-                # ドラッグしていたなら、手を離した時点でパズル判定へ
+                # ドラッグしていたなら、手を離した時点でパズル判定へ(仕様)
                 if drag_src is not None:
                     turn_processed = True
                     
@@ -437,27 +568,16 @@ def main():
                             pg.display.flip()
                             time.sleep(0.4)
 
-                        # 全コンボ処理終了後、落下
-                        grav(field)
-                        
-                        # （以下、以前と同じ落下後の描画処理...）
-                        screen.fill((22, 22, 28))
-                        draw_top(screen, enemy, party, font)
-                        draw_field(screen, field, font)
-                        pg.display.flip()
-                        time.sleep(FRAME_DELAY)
+                        animation_fall(screen, field, font, party, enemy)
 
 
-                    # ここから攻撃や回復をするようにする
                     # ダメージ・回復計算
-                    # ※ count（個数）を使って計算します だから、それ相応の処理を書かねばならむ
 
                     for elem, value in to_do.items():
                         if value == 0:
                             continue
 
                         if elem == "命":
-                            # 回復量は個数が多いほど増える計算
                             heal = jitter(20 * value)
                             party["hp"] = min(party["max_hp"], party["hp"] + heal)
                             message = f"HP +{heal}"
