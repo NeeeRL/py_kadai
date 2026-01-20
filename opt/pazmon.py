@@ -26,23 +26,31 @@ FRAME_DELAY = 0.5
 ENEMY_DELAY = 1.0
 
 partylist = [
-    {"name":"青龍","element":"風","hp":150,"max_hp":150,"ap":15,"dp":10},
-    {"name":"朱雀","element":"火","hp":150,"max_hp":150,"ap":25,"dp":10},
-    {"name":"白虎","element":"土","hp":150,"max_hp":150,"ap":20,"dp":5},
-    {"name":"玄武","element":"水","hp":150,"max_hp":150,"ap":20,"dp":15},
-    {"name":"青龍","element":"風","hp":150,"max_hp":150,"ap":15,"dp":10},
-    {"name":"朱雀","element":"火","hp":150,"max_hp":150,"ap":25,"dp":10},
+    {"name":"青龍","element":"風","hp":150,"max_hp":150,"ap":15,"dp":10,"skills":"竜巻"},
+    {"name":"朱雀","element":"火","hp":150,"max_hp":150,"ap":25,"dp":10,"skills":"火炎放射"},
+    {"name":"白虎","element":"土","hp":150,"max_hp":150,"ap":20,"dp":5,"skills":"引っ掻く"},
+    {"name":"玄武","element":"水","hp":150,"max_hp":150,"ap":20,"dp":15,"skills":"鉄壁"},
+    {"name":"青龍","element":"風","hp":150,"max_hp":150,"ap":15,"dp":10,"skills":"竜巻"},
+    {"name":"朱雀","element":"火","hp":150,"max_hp":150,"ap":25,"dp":10,"skills":"火炎放射"},
 ]
 
 SKILLS = {
-    "青龍": {
-        "name": "⻯巻",
-        "cooltime": 5
+    "竜巻": {
+        "effect": "風属性のダメージ2倍",
+        "ct": 6
     },
-    "朱雀": {
-        "name": "火炎放射",
-        "cooltime": 4
-    }
+    "火炎放射": {
+        "effect": "火ジェムをランダムに6個生成",
+        "ct": 5
+    },
+    "引っ掻く": {
+        "effect": "相手の場のモンスターに最大hpの30%ダメージ",
+        "ct": 7
+    },
+    "鉄壁": {
+        "effect": "相手の動きを２ターン遅らせる",
+        "ct": 8
+    },
 }
 
 info = pg.display.Info()
