@@ -2,6 +2,8 @@ import pygame as pg
 import sys, os, random, time
 from typing import List, Tuple, Optional
 
+pg.init()
+
 # ---------------- フォント解決 ----------------
 def get_jp_font(size: int) -> pg.font.Font:
     bundle = os.path.join("assets", "fonts", "NotoSansJP-VariableFont_wght.ttf")
@@ -19,15 +21,45 @@ def get_jp_font(size: int) -> pg.font.Font:
             return pg.font.Font(path, size)
     return pg.font.SysFont(None, size)
 
-# ---------------- 可変パラメータ ----------------
+# ---------------- パラメータ(可変ではなくなったぜ) ----------------
 FRAME_DELAY = 0.5
 ENEMY_DELAY = 1.0
-WIN_W, WIN_H = 450, 800
 
-FIELD_Y = 450
-SLOT_W = 60
+partylist = [
+    {"name":"青龍","element":"風","hp":150,"max_hp":150,"ap":15,"dp":10},
+    {"name":"朱雀","element":"火","hp":150,"max_hp":150,"ap":25,"dp":10},
+    {"name":"白虎","element":"土","hp":150,"max_hp":150,"ap":20,"dp":5},
+    {"name":"玄武","element":"水","hp":150,"max_hp":150,"ap":20,"dp":15},
+    {"name":"青龍","element":"風","hp":150,"max_hp":150,"ap":15,"dp":10},
+    {"name":"朱雀","element":"火","hp":150,"max_hp":150,"ap":25,"dp":10},
+]
+
+SKILLS = {
+    "青龍": {
+        "name": "⻯巻",
+        "cooltime": 5
+    },
+    "朱雀": {
+        "name": "火炎放射",
+        "cooltime": 4
+    }
+}
+
+info = pg.display.Info()
+screen_w = info.current_w
+screen_h = info.current_h
+WIN_H = screen_h * 0.92
+WIN_W = int(WIN_H * 9/16)
+
+os.environ['SDL_VIDEO_CENTERED'] = '1'
+
+usable_width = WIN_W * 0.90
+
+FIELD_Y = int(WIN_H * 0.55)
 SLOT_PAD = 8
-LEFT_MARGIN = 21
+SLOT_W = int((usable_width - (SLOT_PAD * (6 - 1))) / 6)
+puzzle_total_width = (SLOT_W * 6) + (SLOT_PAD * (6 - 1))
+LEFT_MARGIN = (WIN_W - puzzle_total_width) // 2
 
 # ドラッグ演出
 DRAG_SCALE = 1.18
@@ -47,7 +79,9 @@ def load_monster_image(name: str) -> pg.Surface:
     m = {
         "スライム":"slime.png", "ゴブリン":"goblin.png",
         "オオコウモリ":"bat.png", "ウェアウルフ":"werewolf.png",
-        "ドラゴン":"dragon.png"
+        "ドラゴン":"dragon.png", 
+        "青龍":"seiryu.png", "朱雀":"suzaku.png", 
+        "白虎":"byakko.png", "玄武":"genbu.png"
     }
     fn = m.get(name)
     if fn:
@@ -259,9 +293,11 @@ def animation_fall(screen, field, font, party, enemy):
         pg.display.flip()
         
         if progress >= 1.0:
+            time.sleep(0.5)
             break
         
-        time.sleep(0.05)
+        # ここに遅延入れるとぬるぬるしすぎなくなる
+
 
 
 # ---------------- ダメージ/回復 ----------------
@@ -292,6 +328,19 @@ def enemy_attack(party:dict, monster:dict)->int:
 def slot_rect(i: int) -> pg.Rect:
     tx = LEFT_MARGIN + i * (SLOT_W + SLOT_PAD)
     return pg.Rect(tx, FIELD_Y, SLOT_W, SLOT_W)
+
+def color_type(elem) -> tuple:
+    border_color = (100, 100, 120)
+    match elem:
+            case "火":
+                border_color = (230, 70, 70)
+            case "水":
+                border_color = (70, 150, 230)
+            case "風":
+                border_color = (90, 200, 120)
+            case "土":
+                border_color = (200, 150, 80)
+    return border_color
 
 def draw_gem_at(screen, elem: str, x: int, y: int, scale=1.0, with_shadow=False, font=None):
     r = int((SLOT_W//2 - 10) * scale)
@@ -358,9 +407,35 @@ def draw_heart_icon(screen, x, y, size=20, color=(255, 100, 100)):
     ]
     pg.draw.polygon(screen, color, triangle_points)
 
+def draw_members(screen, partylist) -> list:
+    party_buttons = []
+
+    for i, menber in enumerate(partylist):
+        rect_x = LEFT_MARGIN + i * (SLOT_W + SLOT_PAD)
+        rect_y = WIN_H * 0.4
+        rect = pg.Rect(rect_x, rect_y, SLOT_W, SLOT_W)
+        party_buttons.append({
+            "rect": rect,
+            "data": partylist[i]
+        })
+        pg.draw.rect(screen, (35, 35, 40), rect, border_radius=8)
+        
+        elem = menber["element"]
+        # 黒
+        border_color = color_type(elem)
+        
+        pg.draw.rect(screen, border_color, rect, width=4, border_radius=8)
+
+        img = menber["display_image"]
+
+        img_rect = img.get_rect(center=rect.center)
+        screen.blit(img, img_rect)
+
+    return party_buttons
+
 def draw_unit_status(screen, cx, y, current_hp, max_hp, font, heart_color):
-    bar_w = 350
-    bar_h = 16
+    bar_w = int(WIN_W * 0.81)
+    bar_h = int(WIN_H * 0.02)
     icon_size = 20
     gap = 8
     padding = 6
@@ -400,11 +475,13 @@ def draw_unit_status(screen, cx, y, current_hp, max_hp, font, heart_color):
     
     screen.blit(t_surf, (text_x, text_y))
 
-def draw_top(screen, enemy, party, font):
+
+
+def draw_top(screen, enemy, party, font) -> list:
     cx = WIN_W // 2
 
     # --- 敵画像 ---
-    img = load_monster_image(enemy["name"])
+    img = enemy["display_image"]
     screen.blit(img, (cx - 128, 10))
 
     # --- 敵の名前 ---
@@ -421,30 +498,50 @@ def draw_top(screen, enemy, party, font):
 
     # --- 味方のステータス ---
     draw_unit_status(
-        screen, cx, 410, 
+        screen, cx, int(WIN_H * 0.5), 
         party["hp"], party["max_hp"], 
         font, (255, 80, 80)
     )
 
+    
+    # pa-thi-you no atari hantei wo kaerichi toshite kaesu youni suru
+    party_buttons = draw_members(screen, partylist)
+    
+    return party_buttons
 def draw_message(screen, text, font):
     surf = font.render(text, True, (230,230,230))
     screen.blit(surf,(40,460))
 
+def keep_aspect(img, max_w, max_h):
+    w, h = img.get_size()
+    
+    scale_w = max_w / w
+    scale_h = max_h / h
+    
+    scale = min(scale_w, scale_h)
+    
+    new_w = int(w * scale)
+    new_h = int(h * scale)
+    
+    return pg.transform.smoothscale(img, (new_w, new_h))
+
+# ---------------- skills ----------------
+def skills(member_data):
+    print(f"{member_data['name']} がクリックされた！")
+    print(f"属性: {member_data['element']}")
+
+    
+
 # ---------------- メイン ----------------
 def main():
-    pg.init()
+    # kakudai hyouji
     screen = pg.display.set_mode((WIN_W, WIN_H))
     pg.display.set_caption("Puzzle & Monsters - GUI Prototype")
     font = get_jp_font(20)
 
     party = {
         "player_name":"Player",
-        "allies":[
-            {"name":"青龍","element":"風","hp":150,"max_hp":150,"ap":15,"dp":10},
-            {"name":"朱雀","element":"火","hp":150,"max_hp":150,"ap":25,"dp":10},
-            {"name":"白虎","element":"土","hp":150,"max_hp":150,"ap":20,"dp":5},
-            {"name":"玄武","element":"水","hp":150,"max_hp":150,"ap":20,"dp":15},
-        ],
+        "allies": partylist,
         "hp":600, "max_hp":600, "dp":(10+10+5+15)/4
     }
     enemies = [
@@ -462,6 +559,15 @@ def main():
     drag_elem: Optional[str] = None
     hover_pos: Optional[tuple[int, int]] = None
 
+    for member in party["allies"]:
+        raw = load_monster_image(member["name"])
+        img = keep_aspect(raw, int(SLOT_W * 0.9), int(SLOT_W * 0.9))
+        member["display_image"] = img
+    for en in enemies:
+        raw = load_monster_image(en["name"])
+        img = keep_aspect(raw, int(WIN_W * 0.1), int(WIN_W * 0.1))
+        en["display_image"] = img
+
     clock = pg.time.Clock()
 
     def get_grid_pos_at_mouse(mx: int, my: int) -> Optional[tuple[int, int]]:
@@ -475,16 +581,28 @@ def main():
             return (grid_x, grid_y)
         return None
 
-    # なんかの時用に変数として保持
     running = True
     message = ""
     while running:
+        party_buttons = draw_top(screen, enemy, party, font)
         for e in pg.event.get():
             if e.type == pg.QUIT:
                 running = False
 
+            elif e.type == pg.KEYDOWN:
+                # if e.key == pg.K_ESCAPE:
+                #    running = False
+
+                print('a')
             elif e.type == pg.MOUSEBUTTONDOWN and e.button == 1:
-                mx, my = e.pos
+                mouse_pos = e.pos
+                for btn in party_buttons:
+                    if btn["rect"].collidepoint(mouse_pos):
+                        
+                        target_data = btn["data"]
+                        skills(target_data)
+
+                mx, my = mouse_pos
                 grid_pos = get_grid_pos_at_mouse(mx, my)
                 
                 if grid_pos:
@@ -544,7 +662,7 @@ def main():
 
                         for cluster in clusters:
                             combo += 1
-                            
+
                             elem = cluster["color"]
                             count = cluster["count"]     # その塊のジェム数
                             coords = cluster["coords"]   # その塊の座標リスト
@@ -554,7 +672,6 @@ def main():
                             score = 1.00 + bonus
                             
                             to_do[elem] += score 
-                            
 
                             # 盤面からの削除
                             for (gx, gy) in coords:
@@ -569,10 +686,8 @@ def main():
                             time.sleep(0.4)
 
                         animation_fall(screen, field, font, party, enemy)
-
-
+                        
                     # ダメージ・回復計算
-
                     for elem, value in to_do.items():
                         if value == 0:
                             continue
@@ -584,7 +699,7 @@ def main():
                         else:
                             dmg = party_attack_from_gems(elem, value, combo, party, enemy)
                             message = f"{elem}攻撃！ {dmg} ダメージ"
-                        
+
 
                     if enemy["hp"] <= 0:
                         message = f"{enemy['name']} を倒した！"
