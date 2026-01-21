@@ -27,29 +27,35 @@ ENEMY_DELAY = 1.0
 
 partylist = [
     {"name":"青龍","element":"風","hp":150,"max_hp":150,"ap":15,"dp":10,"skills":"竜巻"},
-    {"name":"朱雀","element":"火","hp":150,"max_hp":150,"ap":25,"dp":10,"skills":"火炎放射"},
+    {"name":"朱雀","element":"火","hp":150,"max_hp":150,"ap":25,"dp":10,"skills":"火を纏う"},
     {"name":"白虎","element":"土","hp":150,"max_hp":150,"ap":20,"dp":5,"skills":"引っ掻く"},
     {"name":"玄武","element":"水","hp":150,"max_hp":150,"ap":20,"dp":15,"skills":"鉄壁"},
     {"name":"青龍","element":"風","hp":150,"max_hp":150,"ap":15,"dp":10,"skills":"竜巻"},
-    {"name":"朱雀","element":"火","hp":150,"max_hp":150,"ap":25,"dp":10,"skills":"火炎放射"},
+    {"name":"朱雀","element":"火","hp":150,"max_hp":150,"ap":25,"dp":10,"skills":"火を纏う"},
 ]
 
 SKILLS = {
     "竜巻": {
         "effect": "風属性のダメージ2倍",
-        "ct": 6
+        "ct": 6,
+
     },
-    "火炎放射": {
+    "火を纏う": {
         "effect": "火ジェムをランダムに6個生成",
-        "ct": 5
+        "ct": 3,
+        "value": {
+            "make": 6, "elem": "火"
+        }
     },
     "引っ掻く": {
         "effect": "相手の場のモンスターに最大hpの30%ダメージ",
-        "ct": 7
+        "ct": 7,
+
     },
     "鉄壁": {
         "effect": "相手の動きを２ターン遅らせる",
-        "ct": 8
+        "ct": 8,
+
     },
 }
 
@@ -215,7 +221,6 @@ def get_clusters(field: List[List[str]], matches: List[dict]) -> List[dict]:
 
     return clusters
 
-
 def animation_fall(screen, field, font, party, enemy):
     rows = len(field)
     cols = len(field[0])
@@ -337,19 +342,6 @@ def slot_rect(i: int) -> pg.Rect:
     tx = LEFT_MARGIN + i * (SLOT_W + SLOT_PAD)
     return pg.Rect(tx, FIELD_Y, SLOT_W, SLOT_W)
 
-def color_type(elem) -> tuple:
-    border_color = (100, 100, 120)
-    match elem:
-            case "火":
-                border_color = (230, 70, 70)
-            case "水":
-                border_color = (70, 150, 230)
-            case "風":
-                border_color = (90, 200, 120)
-            case "土":
-                border_color = (200, 150, 80)
-    return border_color
-
 def draw_gem_at(screen, elem: str, x: int, y: int, scale=1.0, with_shadow=False, font=None):
     r = int((SLOT_W//2 - 10) * scale)
     if with_shadow:
@@ -400,7 +392,6 @@ def draw_field(screen, field: list[list[str]], font,
         mx, my = pg.mouse.get_pos()
         draw_gem_at(screen, drag_elem, mx, my - 4, scale=DRAG_SCALE, with_shadow=True, font=font)
 
-
 def draw_heart_icon(screen, x, y, size=20, color=(255, 100, 100)):
     r = size // 4
     # 左の丸
@@ -430,7 +421,7 @@ def draw_members(screen, partylist) -> list:
         
         elem = menber["element"]
         # 黒
-        border_color = color_type(elem)
+        border_color = COLOR_RGB[elem]
         
         pg.draw.rect(screen, border_color, rect, width=4, border_radius=8)
 
@@ -483,8 +474,6 @@ def draw_unit_status(screen, cx, y, current_hp, max_hp, font, heart_color):
     
     screen.blit(t_surf, (text_x, text_y))
 
-
-
 def draw_top(screen, enemy, party, font) -> list:
     cx = WIN_W // 2
 
@@ -516,6 +505,7 @@ def draw_top(screen, enemy, party, font) -> list:
     party_buttons = draw_members(screen, partylist)
     
     return party_buttons
+
 def draw_message(screen, text, font):
     surf = font.render(text, True, (230,230,230))
     screen.blit(surf,(40,460))
@@ -534,12 +524,47 @@ def keep_aspect(img, max_w, max_h):
     return pg.transform.smoothscale(img, (new_w, new_h))
 
 # ---------------- skills ----------------
-def skills(member_data):
-    print(f"{member_data['name']} がクリックされた！")
-    print(f"属性: {member_data['element']}")
+def skills(member_data, field):
+    name = member_data['skills']
+    skill_data = SKILLS.get(name)
 
+    if not skill_data:
+        return "スキルデータが見つかりません"
+    # value ではなく、メイクジェムみたいなキーにしちゃって、値と区別をつけた方がいいかもしれぬ
+    if "value" in skill_data:
+        message = makegem(skill_data, field)
+        return message
+    else:
+        return f"発動！: {skill_data['effect']}"
+
+def makegem(skill, field) -> str:
+    rows = len(field)
+    cols = len(field[0])
+
+    ef = skill["value"]
+    target_gem = ef["elem"]
+    make_gem_count = ef["make"]
+
+    not_target = []
+
+    for y in range(rows):
+        for x in range(cols):
+            if field[y][x] != target_gem:
+                    not_target.append((x, y))
     
+    message = str(skill['effect'])
 
+    if not not_target:
+        return message
+
+    count = min(len(not_target), make_gem_count)
+
+    chose = random.sample(not_target, count)
+
+    for x, y in chose:
+        field[y][x] = target_gem
+
+    return message
 # ---------------- メイン ----------------
 def main():
     # kakudai hyouji
@@ -608,7 +633,8 @@ def main():
                     if btn["rect"].collidepoint(mouse_pos):
                         
                         target_data = btn["data"]
-                        skills(target_data)
+                        # 必要ないかも
+                        message = skills(target_data, field)
 
                 mx, my = mouse_pos
                 grid_pos = get_grid_pos_at_mouse(mx, my)
