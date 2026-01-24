@@ -1,6 +1,9 @@
 import pygame as pg
 import sys, os, random, time
 from typing import List, Tuple, Optional
+import math
+
+from pygame.draw import rect
 
 pg.init()
 
@@ -34,16 +37,19 @@ partylist = [
     {"name":"朱雀","element":"火","hp":150,"max_hp":150,"ap":25,"dp":10,"skills":"火を纏う"},
 ]
 
+# もしかしたら、elemを配列として渡した方が後々幸せかも(やらんけど)
 SKILLS = {
     "竜巻": {
-        "effect": "風属性のダメージ2倍",
+        "effect": "風属性のダメージ5倍",
         "ct": 6,
-
+        "buff" : {
+            "num": 5, "elem": "風"
+        }
     },
     "火を纏う": {
         "effect": "火ジェムをランダムに6個生成",
         "ct": 3,
-        "value": {
+        "makegem": {
             "make": 6, "elem": "火"
         }
     },
@@ -212,7 +218,7 @@ def get_clusters(field: List[List[str]], matches: List[dict]) -> List[dict]:
                     if field[ny][nx] == color:
                         visited.add((nx, ny))
                         stack.append((nx, ny))
-        
+
         clusters.append({
             "color": color,
             "count": len(gem_group),
@@ -221,7 +227,7 @@ def get_clusters(field: List[List[str]], matches: List[dict]) -> List[dict]:
 
     return clusters
 
-def animation_fall(screen, field, font, party, enemy):
+def animation_fall(screen, field, font, sukill_turn, party, enemy):
     rows = len(field)
     cols = len(field[0])
     
@@ -289,8 +295,8 @@ def animation_fall(screen, field, font, party, enemy):
         pg.event.pump() # フリーズ防止
         
         screen.fill((22, 22, 28))
-        draw_top(screen, enemy, party, font)
-        
+        draw_top(screen, enemy, party, font, sukill_turn )
+
 
         for y in range(rows):
             for x in range(cols):
@@ -301,14 +307,14 @@ def animation_fall(screen, field, font, party, enemy):
         for m in moves:
             current_y = m["start_y"] + (m["end_y"] - m["start_y"]) * t
             draw_gem_at(screen, m["elem"], int(m["x"] + SLOT_W//2), int(current_y + SLOT_W//2), font=font)
-        
+
         draw_message(screen, "落下中...", font)
         pg.display.flip()
-        
+
         if progress >= 1.0:
             time.sleep(0.5)
             break
-        
+
         # ここに遅延入れるとぬるぬるしすぎなくなる
 
 
@@ -323,14 +329,15 @@ def attr_coeff(att,defe):
     if defe in cyc and cyc[defe]==att: return 0.5
     return 1.0
 
-def party_attack_from_gems(elem:str, run_len:int, combo:int, party:dict, monster:dict)->int:
+def party_attack_from_gems(elem:str, run_len:int, combo:int, party:dict, monster:dict, buffs)->int:
     combo_coeff = 1.5 ** ((run_len - 3) + combo)
     if elem=="命":
         heal=jitter(20*combo_coeff); party["hp"]=min(party["max_hp"], party["hp"]+heal); return 0
     ally = next((a for a in party["allies"] if a["element"]==elem), None)
     if not ally: return 0
-    base=max(1, ally["ap"]-monster["dp"])
-    dmg=jitter(base*attr_coeff(elem,monster["element"])*combo_coeff)
+    base=max(1, ally["ap"] -monster["dp"])
+    # print(buffs[elem])
+    dmg=jitter(base*attr_coeff(elem,monster["element"])*combo_coeff)*buffs[elem]
     monster["hp"]=max(0,monster["hp"]-dmg); return dmg
 
 def enemy_attack(party:dict, monster:dict)->int:
@@ -356,7 +363,7 @@ def draw_gem_at(screen, elem: str, x: int, y: int, scale=1.0, with_shadow=False,
     s = f.render(sym, True, (0,0,0))
     screen.blit(s, (x - s.get_width()//2, y - s.get_height()//2))
 
-def draw_field(screen, field: list[list[str]], font, 
+def draw_field(screen, field: list[list[str]], font, animation_list,
                hover_pos: Optional[tuple[int, int]] = None,
                drag_src: Optional[tuple[int, int]] = None, 
                drag_elem: Optional[str] = None):
@@ -371,6 +378,21 @@ def draw_field(screen, field: list[list[str]], font,
             rect_x = LEFT_MARGIN + x * (SLOT_W + SLOT_PAD)
             rect_y = FIELD_Y + y * (SLOT_W + SLOT_PAD)
             rect = pg.Rect(rect_x, rect_y, SLOT_W, SLOT_W)
+
+            scale = 1.0
+
+            for anim in animation_list:
+                if anim["x"] == x and anim["y"] == y:
+                    now = time.time()
+                    elapsed = now - anim["start_time"]
+                    progress = elapsed / anim["duration"]
+
+                    if 0 <= progress <= 1.0:
+                        # sin(0) -> 0, sin(π/2) -> 1, sin(π) -> 0
+                        # これで 1.0 -> 1.5 -> 1.0 という動きになる
+                        wave = math.sin(progress * math.pi)
+                        scale = 1.0 + (0.6 * wave) 
+                    break
 
             is_hover = (hover_pos == (x, y))
             base_color = (60, 60, 80) if is_hover else (35, 35, 40)
@@ -387,6 +409,8 @@ def draw_field(screen, field: list[list[str]], font,
                 sym = ELEMENT_SYMBOLS.get(elem, "?")
                 s = font.render(sym, True, (0, 0, 0))
                 screen.blit(s, (cx - s.get_width() // 2, cy - s.get_height() // 2))
+
+                draw_gem_at(screen, elem, cx, cy, scale=scale, font=font)
 
     if drag_elem is not None:
         mx, my = pg.mouse.get_pos()
@@ -406,26 +430,60 @@ def draw_heart_icon(screen, x, y, size=20, color=(255, 100, 100)):
     ]
     pg.draw.polygon(screen, color, triangle_points)
 
-def draw_members(screen, partylist) -> list:
+def draw_members(screen, partylist, sukill_turn) -> list:
     party_buttons = []
 
-    for i, menber in enumerate(partylist):
+    # スキルデータctと、sukill_turnのindexによってスキル発動できるなら背景を白くする
+
+    for i, member in enumerate(partylist):
+        skillname = member['skills']
+        skill_data = SKILLS.get(skillname)
+        if skill_data is None:
+            print("エラー: スキルは見つかりません")
+            continue
+
+        ct = skill_data["ct"]
+
+
         rect_x = LEFT_MARGIN + i * (SLOT_W + SLOT_PAD)
         rect_y = WIN_H * 0.4
+
+        elem = member["element"]
+        # 黒
+        border_color = COLOR_RGB[elem]
+        bg_color = (35, 35, 40)
+
+        if sukill_turn[i] >= ct:
+            t = time.time() * 5
+            wave = (math.sin(t) + 1) / 2  # 0.0 〜 1.0 に正規化
+            
+            color_min = (35, 35, 40)
+            color_max = (60, 60, 80)
+
+            speed = 4.0
+            t = time.time()
+            wave = (math.sin(t * speed) + 1) / 2
+
+            r = color_min[0] + (color_max[0] - color_min[0]) * wave
+            g = color_min[1] + (color_max[1] - color_min[1]) * wave
+            b = color_min[2] + (color_max[2] - color_min[2]) * wave
+
+            bg_color = (int(r), int(g), int(b))
+
+            rect_y -= 5
+
+
         rect = pg.Rect(rect_x, rect_y, SLOT_W, SLOT_W)
+        
         party_buttons.append({
             "rect": rect,
             "data": partylist[i]
         })
-        pg.draw.rect(screen, (35, 35, 40), rect, border_radius=8)
-        
-        elem = menber["element"]
-        # 黒
-        border_color = COLOR_RGB[elem]
-        
+
+        pg.draw.rect(screen, bg_color, rect, border_radius=8)
         pg.draw.rect(screen, border_color, rect, width=4, border_radius=8)
 
-        img = menber["display_image"]
+        img = member["display_image"]
 
         img_rect = img.get_rect(center=rect.center)
         screen.blit(img, img_rect)
@@ -474,7 +532,7 @@ def draw_unit_status(screen, cx, y, current_hp, max_hp, font, heart_color):
     
     screen.blit(t_surf, (text_x, text_y))
 
-def draw_top(screen, enemy, party, font) -> list:
+def draw_top(screen, enemy, party, font, sukill_turn ) -> list:
     cx = WIN_W // 2
 
     # --- 敵画像 ---
@@ -502,7 +560,7 @@ def draw_top(screen, enemy, party, font) -> list:
 
     
     # pa-thi-you no atari hantei wo kaerichi toshite kaesu youni suru
-    party_buttons = draw_members(screen, partylist)
+    party_buttons = draw_members(screen, partylist, sukill_turn)
     
     return party_buttons
 
@@ -524,24 +582,37 @@ def keep_aspect(img, max_w, max_h):
     return pg.transform.smoothscale(img, (new_w, new_h))
 
 # ---------------- skills ----------------
-def skills(member_data, field):
-    name = member_data['skills']
+def skills(target_data, field, buffs, gem_animations):
+    name = target_data['skills']
     skill_data = SKILLS.get(name)
 
     if not skill_data:
         return "スキルデータが見つかりません"
-    # value ではなく、メイクジェムみたいなキーにしちゃって、値と区別をつけた方がいいかもしれぬ
-    if "value" in skill_data:
-        message = makegem(skill_data, field)
+    # value ではなく、メイクジェムみたいなキーにしちゃって、値と区別をつけた方がいいかもしれぬ <- ok
+    if "makegem" in skill_data:
+        message = makegem(skill_data, field, gem_animations)
+        return message
+    elif "buff" in skill_data:
+        message = buff_party(skill_data, buffs)
         return message
     else:
-        return f"発動！: {skill_data['effect']}"
+        return f"{skill_data['effect']}"
 
-def makegem(skill, field) -> str:
+def buff_party(skill, buffs) -> str:
+    ef = skill["buff"]
+    target_gem = ef["elem"]
+    num = ef["num"]
+    message = str(skill['effect'])
+
+    buffs[target_gem] = num
+
+    return message
+
+def makegem(skill, field, animation_list) -> str:
     rows = len(field)
     cols = len(field[0])
 
-    ef = skill["value"]
+    ef = skill["makegem"]
     target_gem = ef["elem"]
     make_gem_count = ef["make"]
 
@@ -563,6 +634,7 @@ def makegem(skill, field) -> str:
 
     for x, y in chose:
         field[y][x] = target_gem
+        animation_list.append({ "x": x, "y": y, "start_time": time.time(), "duration": 0.6})
 
     return message
 # ---------------- メイン ----------------
@@ -571,6 +643,7 @@ def main():
     screen = pg.display.set_mode((WIN_W, WIN_H))
     pg.display.set_caption("Puzzle & Monsters - GUI Prototype")
     font = get_jp_font(20)
+    gem_animations = []
 
     party = {
         "player_name":"Player",
@@ -616,8 +689,12 @@ def main():
 
     running = True
     message = ""
+    buffs = {"火": 1, "水": 1, "風": 1, "土": 1, "命": 1}
+    # --- index -> hidari kara no junban de skill turn wo teigi ---
+    sukill_turn = [0, 0, 0, 0, 0, 0]
+    turn = 0
     while running:
-        party_buttons = draw_top(screen, enemy, party, font)
+        party_buttons = draw_top(screen, enemy, party, font, sukill_turn )
         for e in pg.event.get():
             if e.type == pg.QUIT:
                 running = False
@@ -629,12 +706,19 @@ def main():
                 print('a')
             elif e.type == pg.MOUSEBUTTONDOWN and e.button == 1:
                 mouse_pos = e.pos
-                for btn in party_buttons:
-                    if btn["rect"].collidepoint(mouse_pos):
-                        
+                for i, btn in enumerate(party_buttons):
+                    skill_name = btn["data"]["skills"]
+                    skill_data = SKILLS.get(skill_name)
+                    if skill_data is None:
+                        print("エラー: スキルは見つかりません")
+                        continue
+
+                    ct = skill_data["ct"]
+                    if (btn["rect"].collidepoint(mouse_pos) and sukill_turn[i] >= ct):
+                        sukill_turn[i] = 0
                         target_data = btn["data"]
-                        # 必要ないかも
-                        message = skills(target_data, field)
+                        # 必要ないかも <- ???
+                        message = skills(target_data, field, buffs, gem_animations)
 
                 mx, my = mouse_pos
                 grid_pos = get_grid_pos_at_mouse(mx, my)
@@ -650,7 +734,7 @@ def main():
                 if drag_src is not None :
                     rows = len(field)
                     cols = len(field[0])
-                    
+
                     raw_x = (mx - LEFT_MARGIN) // (SLOT_W + SLOT_PAD)
                     raw_y = (my - FIELD_Y) // (SLOT_W + SLOT_PAD)
 
@@ -678,7 +762,7 @@ def main():
                 # ドラッグしていたなら、手を離した時点でパズル判定へ(仕様)
                 if drag_src is not None:
                     turn_processed = True
-                    
+
                     drag_src = None
                     drag_elem = None
                     message = "drop now"
@@ -704,23 +788,26 @@ def main():
                             bonus = (count - 3) * 0.10
 
                             score = 1.00 + bonus
-                            
+
                             to_do[elem] += score 
 
                             # 盤面からの削除
                             for (gx, gy) in coords:
                                 field[gy][gx] = "無"
+                            current_time = time.time()
+                            gem_animations = [a for a in gem_animations if current_time - a["start_time"] < a["duration"]]
 
+                            # 描画関数に渡す
                             # 描画更新
                             screen.fill((22, 22, 28))
-                            draw_top(screen, enemy, party, font)
-                            draw_field(screen, field, font)
+                            draw_top(screen, enemy, party, font, sukill_turn)
+                            draw_field(screen, field, font, gem_animations)
                             draw_message(screen, f"コンボ {combo}！ {message}", font)
                             pg.display.flip()
                             time.sleep(0.4)
 
-                        animation_fall(screen, field, font, party, enemy)
-                        
+                        animation_fall(screen, field, font, sukill_turn, party, enemy)
+
                     # ダメージ・回復計算
                     for elem, value in to_do.items():
                         if value == 0:
@@ -731,7 +818,7 @@ def main():
                             party["hp"] = min(party["max_hp"], party["hp"] + heal)
                             message = f"HP +{heal}"
                         else:
-                            dmg = party_attack_from_gems(elem, value, combo, party, enemy)
+                            dmg = party_attack_from_gems(elem, value, combo, party, enemy, buffs)
                             message = f"{elem}攻撃！ {dmg} ダメージ"
 
 
@@ -744,8 +831,8 @@ def main():
                         
                         # 攻撃エフェクト
                         screen.fill((22, 22, 28))
-                        draw_top(screen, enemy, party, font)
-                        draw_field(screen, field, font)
+                        draw_top(screen, enemy, party, font, sukill_turn )
+                        draw_field(screen, field, font, gem_animations)
                         draw_message(screen, message, font)
                         pg.display.flip()
                         time.sleep(FRAME_DELAY)
@@ -761,23 +848,33 @@ def main():
                             message = f"さらに奥へ… 次は {enemy['name']}"
                         else:
                             message = "ダンジョン制覇！おめでとう！（ESCで終了）"
+
+
+                    for i in range(len(sukill_turn)):
+                        sukill_turn[i] += 1
+
+                    for i in range(len(sukill_turn)):
+                        print(f"sukiru ta-n: {sukill_turn[i]}")
+                    turn += 1
+
                     
-                    # （以下、以前と同じ落下後の描画処理...）
                     screen.fill((22, 22, 28))
-                    draw_top(screen, enemy, party, font)
-                    draw_field(screen, field, font)
+                    draw_top(screen, enemy, party, font, sukill_turn )
+                    draw_field(screen, field, font, gem_animations)
                     pg.display.flip()
                     time.sleep(FRAME_DELAY)
 
         screen.fill((22, 22, 28))
-        draw_top(screen, enemy, party, font)
+        draw_top(screen, enemy, party, font, sukill_turn )
         
-        draw_field(screen, field, font, hover_pos=hover_pos, drag_src=drag_src, drag_elem=drag_elem)
+        draw_field(screen, field, font, gem_animations, hover_pos=hover_pos, drag_src=drag_src, drag_elem=drag_elem)
         
         
         draw_message(screen, message, font)
         pg.display.flip()
         clock.tick(60)
+    
+
 
     pg.quit()
     sys.exit()
