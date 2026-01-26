@@ -40,7 +40,7 @@ partylist = [
 # もしかしたら、elemを配列として渡した方が後々幸せかも(やらんけど)
 SKILLS = {
     "竜巻": {
-        "effect": "風属性のダメージ5倍",
+        "effect": "6ターンの間、風属性のダメージ5倍",
         "ct": 6,
         "buff" : {
             "num": 5, "elem": "風"
@@ -54,12 +54,15 @@ SKILLS = {
         }
     },
     "引っ掻く": {
-        "effect": "相手の場のモンスターに最大hpの30%ダメージ",
+        "effect": "相手の場のモンスターに最大hp50%ダメージ",
         "ct": 7,
-
+        "attack" : {
+            # 0.5 -> 50%
+            "num": 0.5
+        }
     },
     "鉄壁": {
-        "effect": "相手の動きを２ターン遅らせる",
+        "effect": "1ターンの間、ダメージ90%カット",
         "ct": 8,
 
     },
@@ -232,7 +235,7 @@ def animation_fall(screen, field, font, sukill_turn, party, enemy):
     cols = len(field[0])
     
     # --- どこからどこへ動くかを計算する ---
-    moves = [] # { "elem":ジェム, "x":ピクセルX, "start_y":開始Y, "end_y":終了Y }
+    moves = []
     
     for x in range(cols):
         old_gems = []
@@ -336,7 +339,6 @@ def party_attack_from_gems(elem:str, run_len:int, combo:int, party:dict, monster
     ally = next((a for a in party["allies"] if a["element"]==elem), None)
     if not ally: return 0
     base=max(1, ally["ap"] -monster["dp"])
-    # print(buffs[elem])
     dmg=jitter(base*attr_coeff(elem,monster["element"])*combo_coeff)*buffs[elem]
     monster["hp"]=max(0,monster["hp"]-dmg); return dmg
 
@@ -389,7 +391,7 @@ def draw_field(screen, field: list[list[str]], font, animation_list,
 
                     if 0 <= progress <= 1.0:
                         # sin(0) -> 0, sin(π/2) -> 1, sin(π) -> 0
-                        # これで 1.0 -> 1.5 -> 1.0 という動きになる
+                        # これで 1.0 -> 1.5 -> 1.0 という動きになる(choi kaeta kara uso tsuteru)
                         wave = math.sin(progress * math.pi)
                         scale = 1.0 + (0.6 * wave) 
                     break
@@ -582,21 +584,34 @@ def keep_aspect(img, max_w, max_h):
     return pg.transform.smoothscale(img, (new_w, new_h))
 
 # ---------------- skills ----------------
-def skills(target_data, field, buffs, gem_animations):
+def skills(target_data, field, buffs, gem_animations, enemy):
     name = target_data['skills']
     skill_data = SKILLS.get(name)
 
     if not skill_data:
         return "スキルデータが見つかりません"
-    # value ではなく、メイクジェムみたいなキーにしちゃって、値と区別をつけた方がいいかもしれぬ <- ok
     if "makegem" in skill_data:
         message = makegem(skill_data, field, gem_animations)
         return message
     elif "buff" in skill_data:
         message = buff_party(skill_data, buffs)
         return message
+    elif "attack" in skill_data:
+        message = AttackSkill(skill_data, enemy)
+        return message
     else:
         return f"{skill_data['effect']}"
+
+def AttackSkill(skill, enemy) -> str:
+    message = str(skill['effect'])
+    ef = skill["attack"]
+    num = ef["num"]
+    max_hp = enemy["max_hp"]
+    damage = int(enemy["max_hp"] * 0.5)
+
+    enemy["hp"] = max(0, enemy["hp"] - damage)
+
+    return message
 
 def buff_party(skill, buffs) -> str:
     ef = skill["buff"]
@@ -645,6 +660,9 @@ def main():
     font = get_jp_font(20)
     gem_animations = []
 
+    skill_queue = [] 
+    current_processing = None
+
     party = {
         "player_name":"Player",
         "allies": partylist,
@@ -689,6 +707,7 @@ def main():
 
     running = True
     message = ""
+    # bairitsu
     buffs = {"火": 1, "水": 1, "風": 1, "土": 1, "命": 1}
     # --- index -> hidari kara no junban de skill turn wo teigi ---
     sukill_turn = [0, 0, 0, 0, 0, 0]
@@ -715,10 +734,14 @@ def main():
 
                     ct = skill_data["ct"]
                     if (btn["rect"].collidepoint(mouse_pos) and sukill_turn[i] >= ct):
+                        skill_queue.append({
+                            "data": btn["data"], # 誰のスキルか
+                            "start_time": 0.0, # 開始時間は後で決める
+                            "index": i # 誰が使ったか
+                        })
+                        
                         sukill_turn[i] = 0
                         target_data = btn["data"]
-                        # 必要ないかも <- ???
-                        message = skills(target_data, field, buffs, gem_animations)
 
                 mx, my = mouse_pos
                 grid_pos = get_grid_pos_at_mouse(mx, my)
@@ -785,7 +808,8 @@ def main():
                             count = cluster["count"]     # その塊のジェム数
                             coords = cluster["coords"]   # その塊の座標リスト
 
-                            bonus = (count - 3) * 0.10
+                            # 倍率バカすぎるかも
+                            bonus = (count - 3) * 0.5
 
                             score = 1.00 + bonus
 
@@ -855,6 +879,13 @@ def main():
 
                     for i in range(len(sukill_turn)):
                         print(f"sukiru ta-n: {sukill_turn[i]}")
+
+
+                    #     buffs = {"火": 1, "水": 1, "風": 1, "土": 1, "命": 1} 普通にどうしよう;;
+
+                    for i, gem in enumerate(buffs):
+                        print(f"buff : {gem} :{buffs[gem]}")
+
                     turn += 1
 
                     
@@ -864,6 +895,35 @@ def main():
                     pg.display.flip()
                     time.sleep(FRAME_DELAY)
 
+        if current_processing is None and len(skill_queue) > 0:
+            current_processing = skill_queue.pop(0)
+            current_processing["start_time"] = time.time()
+            
+            s_name = current_processing["data"]["skills"]
+
+        if current_processing is not None:
+            now = time.time()
+            elapsed = now - current_processing["start_time"]
+
+            if elapsed >= 2.0:
+                target_data = current_processing["data"]
+                
+                res_msg = skills(target_data, field, buffs, gem_animations, enemy)
+                message = res_msg
+                
+                current_processing = None
+                
+                # スキルによる撃破
+                if enemy["hp"] <= 0:
+                    message = f"{enemy['name']} を倒した！"
+                    enemy_idx += 1
+                    
+                    if enemy_idx < len(enemies):
+                        enemy = enemies[enemy_idx]
+                        message += f" 次は {enemy['name']}"
+                    else:
+                        message = "ダンジョン制覇！おめでとう！（ESCで終了）"
+
         screen.fill((22, 22, 28))
         draw_top(screen, enemy, party, font, sukill_turn )
         
@@ -871,9 +931,28 @@ def main():
         
         
         draw_message(screen, message, font)
+    
+        if current_processing is not None:
+            # 暗幕
+            overlay = pg.Surface((WIN_W, WIN_H), pg.SRCALPHA)
+            overlay.fill((0, 0, 0, 150))
+            screen.blit(overlay, (0, 0))
+
+            # キャラ画像や文字
+            p_data = current_processing["data"]
+            
+            img = p_data["display_image"]
+            big_img = pg.transform.scale(img, (256, 256)) 
+            img_rect = big_img.get_rect(center=(WIN_W//2, WIN_H//2 - 50))
+            screen.blit(big_img, img_rect)
+            
+            skill_name = p_data["skills"]
+            text_surf = font.render(skill_name, True, (255, 255, 0))
+            text_rect = text_surf.get_rect(center=(WIN_W//2, WIN_H//2 + 100))
+            screen.blit(text_surf, text_rect)
+
         pg.display.flip()
         clock.tick(60)
-    
 
 
     pg.quit()
