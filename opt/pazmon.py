@@ -37,20 +37,21 @@ partylist = [
     {"name":"朱雀","element":"火","hp":150,"max_hp":150,"ap":25,"dp":10,"skills":"火を纏う"},
 ]
 
-# もしかしたら、elemを配列として渡した方が後々幸せかも(やらんけど)
+# もしかしたら、elemを配列として渡した方が後々幸せかも(やらんけど) <- ごめん何言ってんの
 SKILLS = {
     "竜巻": {
-        "effect": "6ターンの間、風属性のダメージ5倍",
-        "ct": 6,
+        "effect": "5ターンの間、風属性のダメージ5倍",
+        "ct": 5,
         "buff" : {
-            "num": 5, "elem": "風"
+            "num": 5, "elem": "風", "turn": 5
         }
     },
     "火を纏う": {
-        "effect": "火ジェムをランダムに6個生成",
+        "effect": "火・命ジェムをランダムに合計10個生成",
         "ct": 3,
         "makegem": {
-            "make": 6, "elem": "火"
+            # ごめんここか
+            "make": 10, "elem": ["火", "命"]
         }
     },
     "引っ掻く": {
@@ -62,9 +63,11 @@ SKILLS = {
         }
     },
     "鉄壁": {
-        "effect": "1ターンの間、ダメージ90%カット",
-        "ct": 8,
-
+        "effect": "1ターンの間、ダメージ90%カット(重複しない)",
+        "ct": 4,
+        "defence" : {
+            "num": 0.9,
+        }
     },
 }
 
@@ -339,12 +342,13 @@ def party_attack_from_gems(elem:str, run_len:int, combo:int, party:dict, monster
     ally = next((a for a in party["allies"] if a["element"]==elem), None)
     if not ally: return 0
     base=max(1, ally["ap"] -monster["dp"])
-    dmg=jitter(base*attr_coeff(elem,monster["element"])*combo_coeff)*buffs[elem]
+    print(f"elem: {elem} buffs: {buffs}")
+    dmg=jitter(base*attr_coeff(elem,monster["element"])*combo_coeff)*buffs
     monster["hp"]=max(0,monster["hp"]-dmg); return dmg
 
-def enemy_attack(party:dict, monster:dict)->int:
+def enemy_attack(party:dict, monster:dict, def_cut)->int:
     base=max(1, monster["ap"]-party["dp"])
-    dmg=jitter(base); party["hp"]=max(0,party["hp"]-dmg); return dmg
+    dmg=round(jitter(base)*(1 - def_cut)); party["hp"]=max(0,party["hp"]-dmg); return dmg
 
 # ---------------- 描画ユーティリティ ----------------
 def slot_rect(i: int) -> pg.Rect:
@@ -584,30 +588,47 @@ def keep_aspect(img, max_w, max_h):
     return pg.transform.smoothscale(img, (new_w, new_h))
 
 # ---------------- skills ----------------
-def skills(target_data, field, buffs, gem_animations, enemy):
+def skills(target_data, field, buffs, gem_animations, enemy, def_cut) -> tuple[str,int]:
     name = target_data['skills']
     skill_data = SKILLS.get(name)
 
+    defc = def_cut
+
+    message = ""
+
     if not skill_data:
-        return "スキルデータが見つかりません"
+        return "スキルデータが見つかりません", defc
     if "makegem" in skill_data:
         message = makegem(skill_data, field, gem_animations)
-        return message
     elif "buff" in skill_data:
         message = buff_party(skill_data, buffs)
-        return message
     elif "attack" in skill_data:
         message = AttackSkill(skill_data, enemy)
-        return message
+    elif "defence" in skill_data:
+        message, defc = defence(skill_data, def_cut)
+    # 念の為
     else:
-        return f"{skill_data['effect']}"
+        return f"{skill_data['effect']}", defc
+    
+    return message, defc
+
+# def_cutどうやって返そう...
+def defence(skill, def_cut) -> tuple[str, int]:
+    message = str(skill['effect'])
+    ef = skill["defence"]
+    num = ef["num"]
+
+    def_cut = num
+
+    return message, def_cut
+
+
 
 def AttackSkill(skill, enemy) -> str:
     message = str(skill['effect'])
     ef = skill["attack"]
     num = ef["num"]
-    max_hp = enemy["max_hp"]
-    damage = int(enemy["max_hp"] * 0.5)
+    damage = int(enemy["max_hp"] * num)
 
     enemy["hp"] = max(0, enemy["hp"] - damage)
 
@@ -617,9 +638,11 @@ def buff_party(skill, buffs) -> str:
     ef = skill["buff"]
     target_gem = ef["elem"]
     num = ef["num"]
+    turn = ef["turn"]
     message = str(skill['effect'])
 
-    buffs[target_gem] = num
+    buffs[target_gem].append({'count': turn, 'num': num}) 
+
 
     return message
 
@@ -628,15 +651,18 @@ def makegem(skill, field, animation_list) -> str:
     cols = len(field[0])
 
     ef = skill["makegem"]
-    target_gem = ef["elem"]
+    # 変更する配列が入っている
+    target_gems = ef["elem"]
     make_gem_count = ef["make"]
 
+    skip_set = set(target_gems)
     not_target = []
 
     for y in range(rows):
         for x in range(cols):
-            if field[y][x] != target_gem:
-                    not_target.append((x, y))
+            current_gem = field[y][x]
+            if current_gem not in skip_set:
+                not_target.append((x, y))
     
     message = str(skill['effect'])
 
@@ -648,7 +674,10 @@ def makegem(skill, field, animation_list) -> str:
     chose = random.sample(not_target, count)
 
     for x, y in chose:
-        field[y][x] = target_gem
+        # 作るジェムが複数種あるなら、そこからランダムに選ぶ
+        new_gem = random.choice(target_gems)
+        
+        field[y][x] = new_gem
         animation_list.append({ "x": x, "y": y, "start_time": time.time(), "duration": 0.6})
 
     return message
@@ -707,11 +736,24 @@ def main():
 
     running = True
     message = ""
-    # bairitsu
-    buffs = {"火": 1, "水": 1, "風": 1, "土": 1, "命": 1}
+    # bairitsu それぞれの属性のところに、効果時間と倍率をもった辞書の集まりにしてやって、効果時間が０なら辞書から削除、ターン終了時に効果時間を０にしてやればいい
+    buffs = {
+                "火": [
+                        # example
+                        #  {'count': x, 'num': y}
+                    ],
+                "水": [],
+                "風": [],
+                "土": [],
+                "命": []
+            }
     # --- index -> hidari kara no junban de skill turn wo teigi ---
     sukill_turn = [0, 0, 0, 0, 0, 0]
     turn = 0
+
+    # (1 - def_cut)を相手の攻撃力にかける。
+    def_cut = 0.0
+
     while running:
         party_buttons = draw_top(screen, enemy, party, font, sukill_turn )
         for e in pg.event.get():
@@ -786,6 +828,8 @@ def main():
                 if drag_src is not None:
                     turn_processed = True
 
+                    
+
                     drag_src = None
                     drag_elem = None
                     message = "drop now"
@@ -809,7 +853,7 @@ def main():
                             coords = cluster["coords"]   # その塊の座標リスト
 
                             # 倍率バカすぎるかも
-                            bonus = (count - 3) * 0.5
+                            bonus = (count - 3) * 0.8
 
                             score = 1.00 + bonus
 
@@ -842,7 +886,11 @@ def main():
                             party["hp"] = min(party["max_hp"], party["hp"] + heal)
                             message = f"HP +{heal}"
                         else:
-                            dmg = party_attack_from_gems(elem, value, combo, party, enemy, buffs)
+                            default = 1.00
+                            for i in buffs[elem]:
+                                default *= i["num"]
+
+                            dmg = party_attack_from_gems(elem, value, combo, party, enemy, default)
                             message = f"{elem}攻撃！ {dmg} ダメージ"
 
 
@@ -850,7 +898,7 @@ def main():
                         message = f"{enemy['name']} を倒した！"
 
                     if enemy["hp"] > 0:
-                        edmg = enemy_attack(party, enemy)
+                        edmg = enemy_attack(party, enemy, def_cut)
                         message = f"{enemy['name']}の攻撃！ -{edmg}"
                         
                         # 攻撃エフェクト
@@ -881,14 +929,24 @@ def main():
                         print(f"sukiru ta-n: {sukill_turn[i]}")
 
 
-                    #     buffs = {"火": 1, "水": 1, "風": 1, "土": 1, "命": 1} 普通にどうしよう;;
-
                     for i, gem in enumerate(buffs):
                         print(f"buff : {gem} :{buffs[gem]}")
 
                     turn += 1
+                    # 基本的にカットは１ターンにする
+                    def_cut = 0.0
 
-                    
+                    for elem in buffs:
+                        new_list = []
+                        
+                        for b in buffs[elem]:
+                            b["count"] -= 1
+                            
+                            if b["count"] > 0:
+                                new_list.append(b)
+                        buffs[elem] = new_list
+
+
                     screen.fill((22, 22, 28))
                     draw_top(screen, enemy, party, font, sukill_turn )
                     draw_field(screen, field, font, gem_animations)
@@ -908,7 +966,9 @@ def main():
             if elapsed >= 2.0:
                 target_data = current_processing["data"]
                 
-                res_msg = skills(target_data, field, buffs, gem_animations, enemy)
+                res_msg, defc = skills(target_data, field, buffs, gem_animations, enemy, def_cut)
+                def_cut = defc
+                print(def_cut)
                 message = res_msg
                 
                 current_processing = None
