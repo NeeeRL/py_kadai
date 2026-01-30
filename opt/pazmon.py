@@ -28,6 +28,7 @@ def get_jp_font(size: int) -> pg.font.Font:
 FRAME_DELAY = 0.5
 ENEMY_DELAY = 1.0
 
+time_limit = 12.0
 partylist = [
     {"name":"青龍","element":"風","hp":150,"max_hp":150,"ap":15,"dp":10,"skills":"竜巻"},
     {"name":"朱雀","element":"火","hp":150,"max_hp":150,"ap":25,"dp":10,"skills":"火を纏う"},
@@ -587,6 +588,28 @@ def keep_aspect(img, max_w, max_h):
     
     return pg.transform.smoothscale(img, (new_w, new_h))
 
+def draw_timer_bar(screen, cx, cy, start_time):
+    now = time.time()
+    elapsed = now - start_time
+    remaining = max(0, time_limit - elapsed)
+    ratio = remaining / time_limit 
+
+    bar_w = 60
+    bar_h = 6
+    
+    x = cx - bar_w // 2
+    y = cy - 40 
+
+    pg.draw.rect(screen, (0, 0, 0), (x, y, bar_w, bar_h))
+    
+    if ratio > 0.5:
+        color = (0, 255, 0)
+    elif ratio > 0.2:
+        color = (255, 255, 0)
+    else:
+        color = (255, 0, 0)
+
+    pg.draw.rect(screen, color, (x, y, int(bar_w * ratio), bar_h))
 # ---------------- skills ----------------
 def skills(target_data, field, buffs, gem_animations, enemy, def_cut) -> tuple[str,int]:
     name = target_data['skills']
@@ -692,6 +715,8 @@ def main():
     skill_queue = [] 
     current_processing = None
 
+    drg_start_time = 0.0
+
     party = {
         "player_name":"Player",
         "allies": partylist,
@@ -735,6 +760,10 @@ def main():
         return None
 
     running = True
+
+    turn_processed = False
+
+
     message = ""
     # bairitsu それぞれの属性のところに、効果時間と倍率をもった辞書の集まりにしてやって、効果時間が０なら辞書から削除、ターン終了時に効果時間を０にしてやればいい
     buffs = {
@@ -792,6 +821,7 @@ def main():
                     drag_src = grid_pos
                     cx, cy = grid_pos
                     drag_elem = field[cy][cx]
+                    drg_start_time = time.time()
 
             elif e.type == pg.MOUSEMOTION:
                 mx, my = e.pos
@@ -814,28 +844,31 @@ def main():
 
                         if abs(sx - nx) <= 1 and abs(sy - ny) <= 1:
                             field[sy][sx], field[ny][nx] = field[ny][nx], field[sy][sx]
-                            turn_processed = True
                             drag_src = hover_pos
                 else:
                     hover_pos = get_grid_pos_at_mouse(mx, my)
 
 
             elif e.type == pg.MOUSEBUTTONUP and e.button == 1:
-                turn_processed = False
-
-
                 # ドラッグしていたなら、手を離した時点でパズル判定へ(仕様)
                 if drag_src is not None:
                     turn_processed = True
-
-                    
-
                     drag_src = None
                     drag_elem = None
-                    message = "drop now"
+                    message = "Time up"
 
 
-                if turn_processed:
+            if drag_src is not None:
+
+                now = time.time()
+                if now - drg_start_time >= time_limit:
+                    turn_processed = True
+                    drag_src = None
+                    drag_elem = None
+                    message = "Time Up!"
+                    turn_processed = True
+
+            if turn_processed:
                     combo = 0
                     to_do = {"火": 0, "水": 0, "風": 0, "土": 0, "命": 0}
 
@@ -946,12 +979,11 @@ def main():
                                 new_list.append(b)
                         buffs[elem] = new_list
 
+                    turn_processed = False
 
-                    screen.fill((22, 22, 28))
-                    draw_top(screen, enemy, party, font, sukill_turn )
-                    draw_field(screen, field, font, gem_animations)
-                    pg.display.flip()
-                    time.sleep(FRAME_DELAY)
+
+
+
 
         if current_processing is None and len(skill_queue) > 0:
             current_processing = skill_queue.pop(0)
@@ -990,6 +1022,10 @@ def main():
         draw_field(screen, field, font, gem_animations, hover_pos=hover_pos, drag_src=drag_src, drag_elem=drag_elem)
         
         
+        if drag_src is not None:
+            mx, my = pg.mouse.get_pos()
+            draw_timer_bar(screen, mx, my, drg_start_time)
+
         draw_message(screen, message, font)
     
         if current_processing is not None:
