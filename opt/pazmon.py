@@ -783,8 +783,10 @@ def main():
     # (1 - def_cut)を相手の攻撃力にかける。
     def_cut = 0.0
 
+    ismove = False
     while running:
         party_buttons = draw_top(screen, enemy, party, font, sukill_turn )
+        mushi = (current_processing is not None) or turn_processed
         for e in pg.event.get():
             if e.type == pg.QUIT:
                 running = False
@@ -795,6 +797,9 @@ def main():
 
                 print('a')
             elif e.type == pg.MOUSEBUTTONDOWN and e.button == 1:
+                if mushi:
+                    continue
+
                 mouse_pos = e.pos
                 for i, btn in enumerate(party_buttons):
                     skill_name = btn["data"]["skills"]
@@ -821,7 +826,8 @@ def main():
                     drag_src = grid_pos
                     cx, cy = grid_pos
                     drag_elem = field[cy][cx]
-                    drg_start_time = time.time()
+                    drg_start_time = 0.0
+                    ismove = False
 
             elif e.type == pg.MOUSEMOTION:
                 mx, my = e.pos
@@ -845,6 +851,9 @@ def main():
                         if abs(sx - nx) <= 1 and abs(sy - ny) <= 1:
                             field[sy][sx], field[ny][nx] = field[ny][nx], field[sy][sx]
                             drag_src = hover_pos
+                            ismove = True
+                            if drg_start_time == 0:
+                                drg_start_time = time.time()
                 else:
                     hover_pos = get_grid_pos_at_mouse(mx, my)
 
@@ -852,21 +861,26 @@ def main():
             elif e.type == pg.MOUSEBUTTONUP and e.button == 1:
                 # ドラッグしていたなら、手を離した時点でパズル判定へ(仕様)
                 if drag_src is not None:
-                    turn_processed = True
+
+                    if ismove:
+                        turn_processed = True
+                    else:
+                        turn_processed = False
+
                     drag_src = None
                     drag_elem = None
-                    message = "Time up"
 
 
             if drag_src is not None:
+                if drg_start_time > 0:
 
-                now = time.time()
-                if now - drg_start_time >= time_limit:
-                    turn_processed = True
-                    drag_src = None
-                    drag_elem = None
-                    message = "Time Up!"
-                    turn_processed = True
+                    now = time.time()
+                    if now - drg_start_time >= time_limit:
+                        turn_processed = True
+                        drag_src = None
+                        drag_elem = None
+                        message = "Time Up!"
+                        turn_processed = True
 
             if turn_processed:
                     combo = 0
@@ -979,8 +993,8 @@ def main():
                                 new_list.append(b)
                         buffs[elem] = new_list
 
+                    pg.event.clear()
                     turn_processed = False
-
 
 
 
@@ -1023,8 +1037,9 @@ def main():
         
         
         if drag_src is not None:
-            mx, my = pg.mouse.get_pos()
-            draw_timer_bar(screen, mx, my, drg_start_time)
+            if drg_start_time > 0:
+                mx, my = pg.mouse.get_pos()
+                draw_timer_bar(screen, mx, my, drg_start_time)
 
         draw_message(screen, message, font)
     
